@@ -12,8 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 
-	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
-
 	crv1 "github.com/python/consul-operator/pkg/crd/v1"
 )
 
