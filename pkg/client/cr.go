@@ -9,7 +9,6 @@ import (
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 
@@ -66,12 +65,6 @@ func CreateCustomResourceDefinition(config *rest.Config) (*apiextensionsv1beta1.
 		}
 		return false, err
 	})
-	if err != nil {
-		deleteErr := clientset.ApiextensionsV1beta1().CustomResourceDefinitions().Delete(ConsulCRDName, nil)
-		if deleteErr != nil {
-			return nil, errors.NewAggregate([]error{err, deleteErr})
-		}
-		return nil, err
-	}
+
 	return crd, nil
 }
