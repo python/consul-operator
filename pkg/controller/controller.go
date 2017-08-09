@@ -23,11 +23,11 @@ type consulController struct {
 }
 
 func NewController(config *rest.Config) *consulController {
-	cc := &consulController{
+	c := &consulController{
 		config: config,
 	}
 
-	return cc
+	return c
 }
 
 func (c *consulController) Run(ctx context.Context) error {
