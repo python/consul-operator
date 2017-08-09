@@ -1,7 +1,8 @@
-package client
+package controller
 
 import (
-	"fmt"
+	"context"
+	"log"
 	"reflect"
 	"time"
 
@@ -15,12 +16,37 @@ import (
 	crv1 "github.com/python/consul-operator/pkg/crd/v1"
 )
 
-const ConsulCRDName = crv1.ConsulResourcePlural + "." + crv1.GroupName
+const consulCRDName = crv1.ConsulResourcePlural + "." + crv1.GroupName
 
-func CreateCustomResourceDefinition(config *rest.Config) (*apiextensionsv1beta1.CustomResourceDefinition, error) {
+type consulController struct {
+	config *rest.Config
+}
+
+func NewController(config *rest.Config) *consulController {
+	cc := &consulController{
+		config: config,
+	}
+
+	return cc
+}
+
+func (c *consulController) Run(ctx context.Context) error {
+	// Before we do anything else, ensure that our CustomResourceDefinition has
+	// been created. Doing this here prevents people from needing to manage
+	// this on their own.
+	err := c.initResource()
+	if err != nil {
+		return err
+	}
+
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (c *consulController) initResource() error {
 	crd := &apiextensionsv1beta1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: ConsulCRDName,
+			Name: consulCRDName,
 		},
 		Spec: apiextensionsv1beta1.CustomResourceDefinitionSpec{
 			Group:   crv1.GroupName,
@@ -33,19 +59,19 @@ func CreateCustomResourceDefinition(config *rest.Config) (*apiextensionsv1beta1.
 		},
 	}
 
-	clientset, err := apiextensionsclient.NewForConfig(config)
+	clientset, err := apiextensionsclient.NewForConfig(c.config)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	_, err = clientset.ApiextensionsV1beta1().CustomResourceDefinitions().Create(crd)
 	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return nil, err
+		return err
 	}
 
-	// wait for CRD being established
+	// Wait for CRD being established
 	err = wait.Poll(500*time.Millisecond, 60*time.Second, func() (bool, error) {
-		crd, err = clientset.ApiextensionsV1beta1().CustomResourceDefinitions().Get(ConsulCRDName, metav1.GetOptions{})
+		crd, err = clientset.ApiextensionsV1beta1().CustomResourceDefinitions().Get(consulCRDName, metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
@@ -57,12 +83,12 @@ func CreateCustomResourceDefinition(config *rest.Config) (*apiextensionsv1beta1.
 				}
 			case apiextensionsv1beta1.NamesAccepted:
 				if cond.Status == apiextensionsv1beta1.ConditionFalse {
-					fmt.Printf("Name conflict: %v\n", cond.Reason)
+					log.Printf("Name conflict: %v", cond.Reason)
 				}
 			}
 		}
 		return false, err
 	})
 
-	return crd, nil
+	return nil
 }

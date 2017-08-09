@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 
@@ -9,7 +10,7 @@ import (
 	// on GKE.
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
-	consulclient "github.com/python/consul-operator/pkg/client"
+	"github.com/python/consul-operator/pkg/controller"
 	"github.com/python/consul-operator/pkg/utils/k8sutils"
 )
 
@@ -23,11 +24,9 @@ func main() {
 		log.Fatalf("Error configuring: %v", err)
 	}
 
-	// Before we do anything else, ensure that our CustomResourceDefinition has
-	// been created. Doing this here prevents people from needing to manage
-	// this on their own.
-	_, err = consulclient.CreateCustomResourceDefinition(config)
-	if err != nil {
-		log.Fatalf("Error registering %v: %v", consulclient.ConsulCRDName, err)
-	}
+	controller := controller.NewController(config)
+
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	defer cancelFunc()
+	controller.Run(ctx)
 }
