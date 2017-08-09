@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"log"
 	"reflect"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 
 	consulclient "github.com/python/consul-operator/pkg/client"
 	crv1 "github.com/python/consul-operator/pkg/crd/v1"
@@ -27,6 +29,7 @@ type consulController struct {
 	config       *rest.Config
 	consulClient *rest.RESTClient
 	consulScheme *runtime.Scheme
+	queue        workqueue.RateLimitingInterface
 }
 
 func NewController(config *rest.Config) (*consulController, error) {
@@ -41,6 +44,7 @@ func NewController(config *rest.Config) (*consulController, error) {
 		config:       config,
 		consulClient: consulClient,
 		consulScheme: consulScheme,
+		queue:        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 	}
 
 	return c, nil
@@ -74,39 +78,92 @@ func (c *consulController) watchResource(ctx context.Context) error {
 		apiv1.NamespaceAll,
 		fields.Everything())
 
-	_, controller := cache.NewInformer(
+	_, informer := cache.NewIndexerInformer(
 		source,
 		&crv1.Consul{},
-		20*time.Second,
+		// 20*time.Second,
+		0,
 		cache.ResourceEventHandlerFuncs{
-			AddFunc:    c.onAdd,
-			UpdateFunc: c.onUpdate,
-			DeleteFunc: c.onDelete,
-		})
+			AddFunc: func(obj interface{}) {
+				if key, err := cache.MetaNamespaceKeyFunc(obj); err == nil {
+					c.queue.Add(key)
+				}
+			},
+			UpdateFunc: func(old, new interface{}) {
+				if key, err := cache.MetaNamespaceKeyFunc(new); err == nil {
+					c.queue.Add(key)
+				}
+			},
+			DeleteFunc: func(obj interface{}) {
+				if key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err == nil {
+					c.queue.Add(key)
+				}
+			},
+		}, cache.Indexers{})
 
-	go controller.Run(ctx.Done())
+	go informer.Run(ctx.Done())
+
+	// Wait for all caches to be synced, before processing items from the queue
+	// is started
+	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+		return errors.New("Timed out waiting for resoure caches to sync")
+	}
+
+	// Actually run our worker, which will pull items off the queue and process
+	// them.
+	go wait.Until(c.runWorker, time.Second, ctx.Done())
 
 	return nil
 }
 
-func (c *consulController) onAdd(obj interface{}) {
-	consul := obj.(*crv1.Consul)
-
-	log.Printf("[CONTROLLER] onAdd %v", consul.ObjectMeta.SelfLink)
+func (c *consulController) runWorker() {
+	for c.processNext() {
+	}
 }
 
-func (c *consulController) onUpdate(oldObj, newObj interface{}) {
-	oldConsul := oldObj.(*crv1.Consul)
-	newConsul := newObj.(*crv1.Consul)
+func (c *consulController) processNext() bool {
+	key, quit := c.queue.Get()
+	if quit {
+		return false
+	}
 
-	log.Printf("[CONTROLLER] OnUpdate newObj: %v", oldConsul.ObjectMeta.SelfLink)
-	log.Printf("[CONTROLLER] OnUpdate oldObj: %v", newConsul.ObjectMeta.SelfLink)
+	// Tell the queue that we are done with processing this key. This unblocks
+	// the key for other workers This allows safe parallel processing because
+	// two pods with the same key are never processed in parallel.
+	defer c.queue.Done(key)
+
+	err := c.process(key.(string))
+	if err != nil {
+		// This controller retries 5 times if something goes wrong. After that,
+		// it stops trying.
+		if c.queue.NumRequeues(key) < 5 {
+			log.Printf("Error syncing cluster %v: %v", key, err)
+
+			// Re-enqueue the key rate limited. Based on the rate limiter on
+			// the queue and the re-enqueue history, the key will be processed
+			// later again.
+			c.queue.AddRateLimited(key)
+		} else {
+			log.Printf("Giving up syncing cluster %v: %v", key, err)
+
+			// Forget about the #AddRateLimited history of the key on every
+			// successful synchronization. This ensures that future processing
+			// of updates for this key is not delayed because of an outdated
+			// error history.
+			c.queue.Forget(key)
+		}
+	} else {
+		// Again, forgetting the AddRateLimited history to prevent an outdated
+		// error history.
+		c.queue.Forget(key)
+	}
+
+	return true
 }
 
-func (c *consulController) onDelete(obj interface{}) {
-	consul := obj.(*crv1.Consul)
-
-	log.Printf("[CONTROLLER] onDelete %v", consul.ObjectMeta.SelfLink)
+func (c *consulController) process(key string) error {
+	log.Printf("Process: %v", key)
+	return nil
 }
 
 func (c *consulController) initResource() error {
