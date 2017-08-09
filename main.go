@@ -28,5 +28,9 @@ func main() {
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
-	controller.Run(ctx)
+
+	err = controller.Run(ctx)
+	if err != nil {
+		log.Fatalf("Error running controller: %v", err)
+	}
 }
