@@ -6,28 +6,44 @@ import (
 	"reflect"
 	"time"
 
+	apiv1 "k8s.io/api/core/v1"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 
+	consulclient "github.com/python/consul-operator/pkg/client"
 	crv1 "github.com/python/consul-operator/pkg/crd/v1"
 )
 
 const consulCRDName = crv1.ConsulResourcePlural + "." + crv1.GroupName
 
 type consulController struct {
-	config *rest.Config
+	config       *rest.Config
+	consulClient *rest.RESTClient
+	consulScheme *runtime.Scheme
 }
 
-func NewController(config *rest.Config) *consulController {
-	c := &consulController{
-		config: config,
+func NewController(config *rest.Config) (*consulController, error) {
+	// make a new config for our extension's API group, using the first config
+	// as a baseline
+	consulClient, consulScheme, err := consulclient.NewClient(config)
+	if err != nil {
+		return nil, err
 	}
 
-	return c
+	c := &consulController{
+		config:       config,
+		consulClient: consulClient,
+		consulScheme: consulScheme,
+	}
+
+	return c, nil
 }
 
 func (c *consulController) Run(ctx context.Context) error {
@@ -39,8 +55,58 @@ func (c *consulController) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Start watching for changes in our resources, this is how we'll keep track
+	// of what clusters we expect there to exist, and what configuration they
+	// should be in.
+	err = c.watchResource(ctx)
+	if err != nil {
+		return err
+	}
+
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (c *consulController) watchResource(ctx context.Context) error {
+	source := cache.NewListWatchFromClient(
+		c.consulClient,
+		crv1.ConsulResourcePlural,
+		apiv1.NamespaceAll,
+		fields.Everything())
+
+	_, controller := cache.NewInformer(
+		source,
+		&crv1.Consul{},
+		20*time.Second,
+		cache.ResourceEventHandlerFuncs{
+			AddFunc:    c.onAdd,
+			UpdateFunc: c.onUpdate,
+			DeleteFunc: c.onDelete,
+		})
+
+	go controller.Run(ctx.Done())
+
+	return nil
+}
+
+func (c *consulController) onAdd(obj interface{}) {
+	consul := obj.(*crv1.Consul)
+
+	log.Printf("[CONTROLLER] onAdd %v", consul.ObjectMeta.SelfLink)
+}
+
+func (c *consulController) onUpdate(oldObj, newObj interface{}) {
+	oldConsul := oldObj.(*crv1.Consul)
+	newConsul := newObj.(*crv1.Consul)
+
+	log.Printf("[CONTROLLER] OnUpdate newObj: %v", oldConsul.ObjectMeta.SelfLink)
+	log.Printf("[CONTROLLER] OnUpdate oldObj: %v", newConsul.ObjectMeta.SelfLink)
+}
+
+func (c *consulController) onDelete(obj interface{}) {
+	consul := obj.(*crv1.Consul)
+
+	log.Printf("[CONTROLLER] onDelete %v", consul.ObjectMeta.SelfLink)
 }
 
 func (c *consulController) initResource() error {

@@ -24,7 +24,10 @@ func main() {
 		log.Fatalf("Error configuring: %v", err)
 	}
 
-	controller := controller.NewController(config)
+	controller, err := controller.NewController(config)
+	if err != nil {
+		log.Fatalf("Error creating controller: %v", err)
+	}
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
