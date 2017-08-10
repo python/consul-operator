@@ -181,11 +181,11 @@ func (c *consulController) process(key string) error {
 		return err
 	}
 
-	if !exists {
+	if exists {
+		return c.syncConsul(obj.(*crv1.Consul))
+	} else {
 		log.Printf("TODO: Delete Consul Cluster %v", key)
 		return nil
-	} else {
-		return c.syncConsul(obj.(*crv1.Consul))
 	}
 }
 
