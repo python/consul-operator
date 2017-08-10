@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -27,12 +28,19 @@ const consulCRDName = crv1.ConsulResourcePlural + "." + crv1.GroupName
 
 type consulController struct {
 	config       *rest.Config
+	client       *kubernetes.Clientset
 	consulClient *rest.RESTClient
 	consulScheme *runtime.Scheme
 	queue        workqueue.RateLimitingInterface
+	indexer      cache.Indexer
 }
 
 func NewController(config *rest.Config) (*consulController, error) {
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
 	// make a new config for our extension's API group, using the first config
 	// as a baseline
 	consulClient, consulScheme, err := consulclient.NewClient(config)
@@ -42,6 +50,7 @@ func NewController(config *rest.Config) (*consulController, error) {
 
 	c := &consulController{
 		config:       config,
+		client:       client,
 		consulClient: consulClient,
 		consulScheme: consulScheme,
 		queue:        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
@@ -78,7 +87,7 @@ func (c *consulController) watchResource(ctx context.Context) error {
 		apiv1.NamespaceAll,
 		fields.Everything())
 
-	_, informer := cache.NewIndexerInformer(
+	indexer, informer := cache.NewIndexerInformer(
 		source,
 		&crv1.Consul{},
 		// 20*time.Second,
@@ -100,6 +109,8 @@ func (c *consulController) watchResource(ctx context.Context) error {
 				}
 			},
 		}, cache.Indexers{})
+
+	c.indexer = indexer
 
 	go informer.Run(ctx.Done())
 
@@ -163,6 +174,60 @@ func (c *consulController) processNext() bool {
 
 func (c *consulController) process(key string) error {
 	log.Printf("Process: %v", key)
+
+	obj, exists, err := c.indexer.GetByKey(key)
+	if err != nil {
+		log.Printf("Fetching object with key %s from store failed with %v", key, err)
+		return err
+	}
+
+	if !exists {
+		log.Printf("TODO: Delete Consul Cluster %v", key)
+	} else {
+		consul := obj.(*crv1.Consul)
+		serviceClient := c.client.CoreV1().Services(consul.GetNamespace())
+
+		// Attempt to fetch our serviceDef from the kuberentes server
+		_, err := serviceClient.Get(consul.GetName(), metav1.GetOptions{})
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				return err
+			}
+
+			_, err = serviceClient.Create(&apiv1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      consul.GetName(),
+					Namespace: consul.GetNamespace(),
+					OwnerReferences: []metav1.OwnerReference{
+						*metav1.NewControllerRef(consul, crv1.SchemeConsulGroupVersionKind),
+					},
+					Annotations: map[string]string{
+						"service.alpha.kubernetes.io/tolerate-unready-endpoints": "true",
+					},
+				},
+				Spec: apiv1.ServiceSpec{
+					Ports: []apiv1.ServicePort{
+						{Name: "server-rpc", Port: 8300},
+						{Name: "serf-lan", Port: 8301},
+						{Name: "serf-wan", Port: 8302},
+						{Name: "http-api", Port: 8500},
+						{Name: "dns-api", Port: 8600},
+					},
+					Selector:  map[string]string{"consul-cluster": consul.GetName()},
+					ClusterIP: "None",
+				},
+			})
+			if err != nil {
+				return err
+			}
+		} else {
+			// TODO: Implementing Updating of Services? This doesn't really
+			//       make any sense right now, because there's nothing that
+			//       can be updated. However if we let people configure ports
+			//       then we'll want to implement this.
+		}
+	}
+
 	return nil
 }
 

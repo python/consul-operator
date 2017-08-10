@@ -17,6 +17,12 @@ const GroupName = "k8s.psf.io"
 // SchemeGroupVersion is the group version used to register these objects.
 var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "v1"}
 
+var SchemeConsulGroupVersionKind = schema.GroupVersionKind{
+	Group:   SchemeGroupVersion.Group,
+	Version: SchemeGroupVersion.Version,
+	Kind:    "Consul",
+}
+
 // Resource takes an unqualified resource and returns a Group-qualified GroupResource.
 func Resource(resource string) schema.GroupResource {
 	return SchemeGroupVersion.WithResource(resource).GroupResource()
