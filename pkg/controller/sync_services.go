@@ -53,3 +53,14 @@ func (c *consulController) syncService(consul *crv1.Consul) error {
 
 	return nil
 }
+
+func (c *consulController) deleteService(namespace, name string) error {
+	serviceClient := c.client.CoreV1().Services(namespace)
+
+	err := serviceClient.Delete(name, &metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+
+	return nil
+}

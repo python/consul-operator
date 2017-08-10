@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"reflect"
+	"strings"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -19,6 +20,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+
+	multierror "github.com/hashicorp/go-multierror"
 
 	consulclient "github.com/python/consul-operator/pkg/client"
 	crv1 "github.com/python/consul-operator/pkg/crd/v1"
@@ -184,8 +187,9 @@ func (c *consulController) process(key string) error {
 	if exists {
 		return c.syncConsul(obj.(*crv1.Consul))
 	} else {
-		log.Printf("TODO: Delete Consul Cluster %v", key)
-		return nil
+		namespace := strings.Split(key, "/")[0]
+		name := strings.Split(key, "/")[1]
+		return c.deleteConsul(namespace, name)
 	}
 }
 
@@ -193,9 +197,22 @@ func (c *consulController) syncConsul(consul *crv1.Consul) error {
 	err := c.syncService(consul)
 	if err != nil {
 		log.Printf("Syncing service for %v failed: %v", consul.GetName(), err)
+		return err
 	}
 
 	return nil
+}
+
+func (c *consulController) deleteConsul(namespace, name string) error {
+	var result *multierror.Error
+
+	err := c.deleteService(namespace, name)
+	if err != nil {
+		log.Printf("Error deleting service for %v/%v", namespace, name)
+		result = multierror.Append(result, err)
+	}
+
+	return result.ErrorOrNil()
 }
 
 func (c *consulController) initResource() error {
