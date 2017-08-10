@@ -183,49 +183,16 @@ func (c *consulController) process(key string) error {
 
 	if !exists {
 		log.Printf("TODO: Delete Consul Cluster %v", key)
+		return nil
 	} else {
-		consul := obj.(*crv1.Consul)
-		serviceClient := c.client.CoreV1().Services(consul.GetNamespace())
+		return c.syncConsul(obj.(*crv1.Consul))
+	}
+}
 
-		// Attempt to fetch our serviceDef from the kuberentes server
-		_, err := serviceClient.Get(consul.GetName(), metav1.GetOptions{})
-		if err != nil {
-			if !apierrors.IsNotFound(err) {
-				return err
-			}
-
-			_, err = serviceClient.Create(&apiv1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      consul.GetName(),
-					Namespace: consul.GetNamespace(),
-					OwnerReferences: []metav1.OwnerReference{
-						*metav1.NewControllerRef(consul, crv1.SchemeConsulGroupVersionKind),
-					},
-					Annotations: map[string]string{
-						"service.alpha.kubernetes.io/tolerate-unready-endpoints": "true",
-					},
-				},
-				Spec: apiv1.ServiceSpec{
-					Ports: []apiv1.ServicePort{
-						{Name: "server-rpc", Port: 8300},
-						{Name: "serf-lan", Port: 8301},
-						{Name: "serf-wan", Port: 8302},
-						{Name: "http-api", Port: 8500},
-						{Name: "dns-api", Port: 8600},
-					},
-					Selector:  map[string]string{"consul-cluster": consul.GetName()},
-					ClusterIP: "None",
-				},
-			})
-			if err != nil {
-				return err
-			}
-		} else {
-			// TODO: Implementing Updating of Services? This doesn't really
-			//       make any sense right now, because there's nothing that
-			//       can be updated. However if we let people configure ports
-			//       then we'll want to implement this.
-		}
+func (c *consulController) syncConsul(consul *crv1.Consul) error {
+	err := c.syncService(consul)
+	if err != nil {
+		log.Printf("Syncing service for %v failed: %v", consul.GetName(), err)
 	}
 
 	return nil
